@@ -1,0 +1,14 @@
+{
+  "name": "ezangui-intent",
+  "description": "Private marketplace for the intent plugin (internal preview, pre-open-source).",
+  "owner": {
+    "name": "ezangui"
+  },
+  "plugins": [
+    {
+      "name": "intent",
+      "source": "./",
+      "description": "Intent annotation and receipt system: plan -> approve -> edit -> finalize, with an opt-in per-project enforcement gate."
+    }
+  ]
+}
