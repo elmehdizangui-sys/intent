@@ -1,6 +1,6 @@
 {
   "name": "intent",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Intent annotation and receipt system for Claude Code. Tracks what the agent changed and why, with a per-project, opt-in approval gate (plan -> \"go\" -> edit -> finalize). Auto-injects session history at startup when .intent/ is found.",
   "author": {
     "name": "ezangui",

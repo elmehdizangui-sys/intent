@@ -42,12 +42,13 @@ Three steps in order. Do not skip or reorder.
 
 Read files needed to understand the request (max 20). Then write in chat:
 
+- **Plan name**: a short kebab-case slug (3-6 words) that summarizes the change, e.g. `add-find-quest-method`. This becomes the filename under `.intent/plans/` — pick something a developer could recognize months later in a directory listing, not a paraphrase of the request sentence.
 - **Reformulation**: one sentence — the dev's intent in clear English, same scope, never expanded.
 - **Plan**: numbered list of every file and change needed.
 
 Say:
 
-> "Reply **go** to proceed, or tell me what to change."
+> "Reply **go** to proceed with this plan name, **go as \<name>** to use a different one, or tell me what to change."
 
 **Do not edit any file until the dev replies "go".**
 
@@ -223,7 +224,7 @@ How it works (hybrid):
 2. **Stop hook** is the guarantee: on session end, if the working tree changed since the last receipt and `auto_finalize` is on, it auto-writes a git-diff receipt — even if the agent never called `finalize`.
 
 The `full` gate is **enforced**, not advisory. SessionStart can only inject text, which the agent can ignore for short requests. So the gate also runs at the tool layer:
-- **`UserPromptSubmit` hook** (`intent-gate-prompt.py`) opens the gate when the user sends a bare approval (`go`, `go ahead`, `lgtm`, `proceed`, …) and clears it on any other prompt (a new task re-arms the gate). The gate is a per-session token at `.intent/.gate`. On approval it also mines the transcript for the plan text the agent posted just before the "go" and appends it as plain text to `.intent/plans/<session_id>.md` — a hidden, committable, per-session log readable at review time even before `finalize` runs. Every session gets its own file, so old sessions' plans stay in the repo permanently instead of being overwritten by the next session; multiple approvals within the same session append to that session's file. Re-arming the gate for a new task only clears `.intent/.gate` — plan files are never touched by that.
+- **`UserPromptSubmit` hook** (`intent-gate-prompt.py`) opens the gate when the user sends a bare approval (`go`, `go ahead`, `lgtm`, `proceed`, …) **and** the assistant's last turn actually looks like a plan (Reformulation + numbered steps, not just chat or a post-hoc summary) — a "go" with nothing plan-shaped behind it leaves the gate untouched, so `PreToolUse` keeps blocking. Any other prompt clears the gate (a new task re-arms it). The gate is a per-session token at `.intent/.gate`. On a real approval it also mines the transcript for the plan text the agent posted just before the "go" and appends it as plain text to `.intent/plans/<seq>-<slug>.md` — a hidden, committable, per-session log readable at review time even before `finalize` runs. `<seq>` is a zero-padded counter so files list in creation order; `<slug>` comes from the agent's proposed **`Plan name:`** line (falling back to `Reformulation:`, then the first non-empty line, if the agent didn't propose one), so the filename says what the plan is about at a glance instead of paraphrasing whatever chatty preamble preceded the plan. The dev can override the proposed name at approval time — `go as fetch-quest-by-id` — and that name is used verbatim instead. The session id itself is recorded inside the file, not the name. Every session gets its own file (found again via that embedded session id), so old sessions' plans stay in the repo permanently instead of being overwritten by the next session; multiple approvals within the same session append to that session's file. Re-arming the gate for a new task only clears `.intent/.gate` — plan files are never touched by that.
 - **`PreToolUse` hook** on `Edit|Write|MultiEdit` (`intent-gate-check.py`) **denies the edit (exit 2)** while the gate is closed, instructing the agent to present a plan and wait for "go". It fails open on `gate != "full"` or any internal error, so other modes and broken state never wedge a session. Receipts are written via the CLI (not `Edit`/`Write`), so `finalize` is never blocked.
 
 Configure it:

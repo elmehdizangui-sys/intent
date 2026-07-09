@@ -30,6 +30,34 @@ def test_non_approval_phrases(prompt: str):
     assert gate.is_approval(prompt) is False
 
 
+# --- approval with plan-name override ---------------------------------------
+
+@pytest.mark.parametrize("prompt", ["go", "go ahead", "lgtm", "  go  "])
+def test_parse_approval_bare_has_no_override(prompt: str):
+    assert gate.parse_approval(prompt) == (True, "")
+
+
+@pytest.mark.parametrize(
+    ("prompt", "override"),
+    [
+        ("go as fetch-quest-by-id", "fetch-quest-by-id"),
+        ("go named fetch-quest-by-id", "fetch-quest-by-id"),
+        ("go name: fetch-quest-by-id", "fetch-quest-by-id"),
+        ("go ahead as add-quest-finder", "add-quest-finder"),
+    ],
+)
+def test_parse_approval_with_override(prompt: str, override: str):
+    assert gate.parse_approval(prompt) == (True, override)
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    ["go to the store", "go implement the parser", "should I go ahead?", ""],
+)
+def test_parse_approval_non_approval_has_no_override(prompt: str):
+    assert gate.parse_approval(prompt) == (False, "")
+
+
 # --- gate state lifecycle --------------------------------------------------
 
 def test_gate_closed_by_default(tmp_path: Path):
@@ -74,7 +102,9 @@ def test_empty_session_id_matches_empty(tmp_path: Path):
 
 def test_open_gate_with_plan_writes_session_plan_file(tmp_path: Path):
     gate.open_gate(tmp_path, "s1", plan_text="1. Do the thing")
-    text = gate.plan_path(tmp_path, "s1").read_text(encoding="utf-8")
+    path = gate.plan_path(tmp_path, "s1")
+    assert path.name == "001-do-the-thing.md"
+    text = path.read_text(encoding="utf-8")
     assert text == "<!-- session_id: s1 -->\n\n1. Do the thing\n"
 
 
@@ -126,15 +156,57 @@ def test_new_session_gets_its_own_file_old_one_survives(tmp_path: Path):
     assert "1. New session plan" not in old_text
 
 
-def test_plan_path_sanitizes_unsafe_session_id(tmp_path: Path):
+def test_plan_path_is_unaffected_by_unsafe_session_id(tmp_path: Path):
+    """Session id no longer appears in the filename, so it can't inject path
+    segments there — it only ever lands inside the file as a comment."""
     path = gate.plan_path(tmp_path, "../../etc/passwd")
     assert path.parent == tmp_path / ".intent" / "plans"
     assert ".." not in path.name and "/" not in path.name
 
 
-def test_plan_path_falls_back_for_empty_session_id(tmp_path: Path):
-    path = gate.plan_path(tmp_path, "")
-    assert path.name == "unknown.md"
+def test_plan_path_falls_back_to_untitled_for_empty_plan_text(tmp_path: Path):
+    path = gate.plan_path(tmp_path, "s1")
+    assert path.name == "001-untitled.md"
+
+
+def test_plan_path_slug_reflects_plan_text_first_line(tmp_path: Path):
+    path = gate.plan_path(tmp_path, "s1", plan_text="## Add subtraction support\n\nmore detail")
+    assert path.name == "001-add-subtraction-support.md"
+
+
+def test_plan_path_slug_prefers_plan_name_line_over_preamble(tmp_path: Path):
+    plan_text = (
+        "I need to get plan confirmation first per this repo's intent-gate "
+        "hook. Here's my plan:\n\n"
+        "**Plan name:** add-find-quest-method\n\n"
+        "**Reformulation:** Add a findQuest method.\n\n"
+        "1. Do the thing\n2. Do another thing"
+    )
+    path = gate.plan_path(tmp_path, "s1", plan_text=plan_text)
+    assert path.name == "001-add-find-quest-method.md"
+
+
+def test_plan_path_slug_falls_back_to_reformulation_line(tmp_path: Path):
+    plan_text = (
+        "Sure, here is what I'll do:\n\n"
+        "**Reformulation:** Add subtraction support to the calculator.\n\n"
+        "1. Edit Calculator.kt"
+    )
+    path = gate.plan_path(tmp_path, "s1", plan_text=plan_text)
+    assert path.name == "001-add-subtraction-support-to-the-calculator.md"
+
+
+def test_plan_path_slug_override_wins_over_mined_plan_text(tmp_path: Path):
+    plan_text = "**Plan name:** whatever-the-ai-picked\n\n1. Step one"
+    path = gate.plan_path(tmp_path, "s1", plan_text=plan_text, slug_override="fetch-quest-by-id")
+    assert path.name == "001-fetch-quest-by-id.md"
+
+
+def test_plan_path_sequence_increments_across_sessions(tmp_path: Path):
+    gate.open_gate(tmp_path, "s1", plan_text="1. First plan")
+    gate.open_gate(tmp_path, "s2", plan_text="1. Second plan")
+    assert gate.plan_path(tmp_path, "s1").name == "001-first-plan.md"
+    assert gate.plan_path(tmp_path, "s2").name == "002-second-plan.md"
 
 
 def test_mine_last_assistant_text_empty_path():
@@ -168,6 +240,35 @@ def test_mine_last_assistant_text_truncates_to_limit(tmp_path: Path):
         encoding="utf-8",
     )
     assert gate.mine_last_assistant_text(str(transcript), limit=10) == "x" * 10
+
+
+# --- plan-shape heuristic ---------------------------------------------------
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "1. Reformulate the request\n2. Edit Foo.kt\n3. Edit Bar.kt",
+        "Reformulation: add logging\n\nPlan:\n1. Add logger to Service\n2. Wire it in main",
+        "- Update the schema\n- Add a migration\n- Write a test",
+    ],
+)
+def test_looks_like_plan_true_for_plan_shaped_text(text: str):
+    assert gate.looks_like_plan(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "   ",
+        "sounds good",
+        "Everything is in order, all done!",
+        "1. Just one line, no second line",
+        "This is a single long line with no list markers at all, just prose describing what happened after the fact",
+    ],
+)
+def test_looks_like_plan_false_for_non_plan_text(text: str):
+    assert gate.looks_like_plan(text) is False
 
 
 def test_mine_last_assistant_text_skips_malformed_lines(tmp_path: Path):

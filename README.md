@@ -68,6 +68,14 @@ cd /path/to/your-project
 claude plugin install intent@ezangui-intent --scope project
 ```
 
+Updating the intent 
+
+```bash
+cd /path/to/your-project
+claude plugin update intent@ezangui-intent --scope project
+```
+
+
 `--scope project` is what matters here: it writes `enabledPlugins` into
 `your-project/.claude/settings.json` — a file that belongs to that project,
 not your global config. Other repos you work on are completely unaffected.
@@ -93,7 +101,7 @@ every task without typing `/intent` — commit `.intent/config.json` at the
 project root:
 
 ```json
-{ "auto_intent": true, "gate": "lightweight", "auto_finalize": true, "model": "claude-opus-4-8" }
+ s
 ```
 
 See "Configuration reference" below for what each field does and which
@@ -146,8 +154,11 @@ the gate for the session the moment you send a bare approval (`go`,
 `go ahead`, `lgtm`, `proceed`, …), and closes it again on your next
 substantive prompt (re-arming for the next task). On approval, it also mines
 the transcript for the plan text the agent posted right before your "go" and
-appends it to `.intent/plans/<session_id>.md` — a plain-text, per-session,
-committable log of every approved plan, readable even before `finalize` runs.
+appends it to `.intent/plans/<seq>-<slug>.md` (e.g. `003-add-request-logging.md`)
+— a plain-text, per-session, committable log of every approved plan, readable
+even before `finalize` runs. The sequence number keeps files in creation
+order and the slug names what the plan is about; the session id is recorded
+inside the file, not the filename.
 
 ### Recommended starting configs
 
