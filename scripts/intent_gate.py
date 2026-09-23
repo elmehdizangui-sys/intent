@@ -9,7 +9,8 @@ it cannot stop an edit. This module backs a real gate that lives at PreToolUse:
                          assistant's last turn actually looks like a plan;
                          otherwise clear it (a new substantive request
                          re-arms the gate).
-  - PreToolUse(Edit)  -> allow the edit only while the gate is open; otherwise
+  - PreToolUse(Edit, and Bash that writes files)
+                      -> allow the edit only while the gate is open; otherwise
                          deny it (exit 2) and tell the agent to present a plan.
 
 State is a single token file `.intent/.gate` holding the session id that opened
@@ -288,3 +289,40 @@ def gate_is_open(root: Path, session_id: str) -> bool:
         return str(raw.get("session_id", "")) == (session_id or "")
     except Exception:
         return False
+
+
+# --- Bash file-write detection ----------------------------------------------
+#
+# Gating only Edit|Write|MultiEdit let an agent write the same files through
+# Bash (`sed -i`, `cat > f`, a python heredoc calling write_text) and walk
+# straight past the gate. These patterns catch the common shell write idioms
+# so the PreToolUse hook can deny them too. Read-only commands (grep, cat,
+# git status, a build that logs to /tmp) stay allowed so planning isn't wedged.
+# ponytail: regex heuristic, not a shell parser - an obfuscated write (eval,
+# base64, a script file run by path) still gets through. Upgrade path: an
+# allowlist of read-only commands instead of a denylist of writes.
+
+# `>`/`>>` redirection to a real file. Excludes fd duplication (`2>&1`, `>&2`),
+# arrows/comparisons inside strings (`->`, `=>`, `>=`), and scratch targets.
+_REDIRECT = re.compile(r"(?<![-=<>])\d*>>?(?![>=&])\s*([^\s;&|()<>]+)")
+_SCRATCH_TARGET = re.compile(r"""^["']?(/dev/|/tmp/|/private/tmp/|/var/folders/|\$TMPDIR)""")
+_WRITE_COMMANDS = [
+    re.compile(r"\btee\b(?!\s+(-a\s+)?/dev/)"),
+    re.compile(r"\b(sed|perl|ruby)\b[^|;&\n]*\s-(i|pi)\b"),
+    re.compile(r"\b(cp|mv|patch|truncate|install)\s"),
+    re.compile(r"\bgit\s+apply\b"),
+    re.compile(r"\bdd\b[^|;&\n]*\bof="),
+    # write APIs inside a python/node/ruby heredoc or -c/-e one-liner
+    re.compile(r"\b(write_text|write_bytes|writeFileSync|writeFile|appendFileSync|File\.write)\s*\("),
+    re.compile(r"""\bopen\s*\([^)]*,\s*["'][wax+]"""),
+]
+
+
+def bash_writes_files(command: str) -> bool:
+    """True when a Bash command looks like it modifies a file outside scratch space."""
+    if not command:
+        return False
+    for match in _REDIRECT.finditer(command):
+        if not _SCRATCH_TARGET.match(match.group(1)):
+            return True
+    return any(p.search(command) for p in _WRITE_COMMANDS)

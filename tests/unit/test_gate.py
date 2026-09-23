@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -281,3 +283,86 @@ def test_mine_last_assistant_text_skips_malformed_lines(tmp_path: Path):
         encoding="utf-8",
     )
     assert gate.mine_last_assistant_text(str(transcript)) == "1. Plan A"
+
+
+# --- Bash file-write detection ----------------------------------------------
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sed -i '' 's/a/b/' src/Foo.kt",
+        "sed -i.bak -e 's/a/b/' src/Foo.kt",
+        "perl -pi -e 's/a/b/' src/Foo.kt",
+        "echo hi > src/Foo.kt",
+        "echo hi >> README.md",
+        "cat > src/Foo.kt <<'EOF'\nclass Foo\nEOF",
+        "printf x | tee src/Foo.kt",
+        "cp a.kt src/b.kt",
+        "mv a.kt b.kt",
+        "git apply change.patch",
+        # the heredoc shape that walked past the Edit-only gate in practice
+        "python3 - <<'EOF'\nimport pathlib\nf=pathlib.Path('Foo.kt'); f.write_text(f.read_text().replace('a','b'))\nEOF",
+        "python3 -c \"open('Foo.kt', 'w').write('x')\"",
+        "node -e \"require('fs').writeFileSync('a.js', 'x')\"",
+    ],
+)
+def test_bash_writes_files_true_for_write_idioms(command: str):
+    assert gate.bash_writes_files(command) is True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "",
+        "grep -rn 'foo' src",
+        "cat src/Foo.kt | head -20",
+        "git status && git diff",
+        "sed -n 1,40p src/Foo.kt",
+        "./gradlew build 2>&1 | tail -30",
+        "ls missing 2>/dev/null",
+        "echo err >&2",
+        "./gradlew build > /tmp/build.log 2>&1",
+        "./gradlew build > /private/tmp/claude/scratch/build.log",
+        "grep -n 'a -> b' src/Foo.kt",
+        "python3 -c \"print(1 >= 0)\"",
+        "python3 -c \"open('Foo.kt').read()\"",
+    ],
+)
+def test_bash_writes_files_false_for_read_only_commands(command: str):
+    assert gate.bash_writes_files(command) is False
+
+
+# --- PreToolUse hook end to end ---------------------------------------------
+
+_HOOK = Path(__file__).resolve().parents[2] / "hooks" / "scripts" / "intent-gate-check.py"
+
+
+def _run_hook(repo: Path, payload: dict) -> int:
+    return subprocess.run(
+        [sys.executable, str(_HOOK)],
+        input=json.dumps(payload), text=True, cwd=repo, capture_output=True,
+    ).returncode
+
+
+@pytest.fixture
+def full_gate_repo(tmp_path: Path) -> Path:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".intent").mkdir()
+    (tmp_path / ".intent" / "config.json").write_text(json.dumps({"gate": "full"}), encoding="utf-8")
+    return tmp_path
+
+
+def test_hook_denies_bash_write_while_gate_closed(full_gate_repo: Path):
+    payload = {"session_id": "s1", "tool_name": "Bash", "tool_input": {"command": "sed -i '' 's/a/b/' Foo.kt"}}
+    assert _run_hook(full_gate_repo, payload) == 2
+
+
+def test_hook_allows_read_only_bash_while_gate_closed(full_gate_repo: Path):
+    payload = {"session_id": "s1", "tool_name": "Bash", "tool_input": {"command": "grep -rn foo ."}}
+    assert _run_hook(full_gate_repo, payload) == 0
+
+
+def test_hook_allows_bash_write_once_gate_open(full_gate_repo: Path):
+    gate.open_gate(full_gate_repo, "s1", plan_text="1. Step one\n2. Step two")
+    payload = {"session_id": "s1", "tool_name": "Bash", "tool_input": {"command": "sed -i '' 's/a/b/' Foo.kt"}}
+    assert _run_hook(full_gate_repo, payload) == 0

@@ -197,8 +197,12 @@ Four hooks, one CLI, one JSON file format:
 2. **`UserPromptSubmit`** (`intent-gate-prompt.py`) — only relevant to
    `gate=full`: detects bare approvals and opens/closes the per-session gate
    token, and captures the approved plan text (see above).
-3. **`PreToolUse`** on `Edit|Write|MultiEdit` (`intent-gate-check.py`) — the
-   actual enforcement point for `gate=full`. Fails **open** (allows the edit)
+3. **`PreToolUse`** on `Edit|Write|MultiEdit|Bash` (`intent-gate-check.py`) — the
+   actual enforcement point for `gate=full`. Bash is denied only when the
+   command looks like a file write (`sed -i`, `>` redirection, `tee`, `cp`/`mv`,
+   a heredoc calling `write_text`/`open(..., "w")`, ...) so editing through the
+   shell can't bypass the gate; read-only Bash and writes to `/tmp` stay
+   allowed. It's a regex heuristic, not a shell parser. Fails **open** (allows the edit)
    on any internal error or when gate isn't `full`, so a broken config or an
    unrelated project can never get wedged.
 4. **`Stop`** (`intent-auto-finalize.py`) — if `auto_finalize` is on and the
