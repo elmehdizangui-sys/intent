@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
-PreToolUse hook (Edit|Write|MultiEdit): the enforcing half of the plan gate.
+PreToolUse hook (Edit|Write|MultiEdit|Bash): the enforcing half of the plan gate.
 
-Denies a file edit (exit 2) unless the gate is open for this session. This is
+Denies a file edit (exit 2) unless the gate is open for this session. Bash is
+gated too, but only when the command looks like a file write (sed -i, `>`
+redirection, a heredoc calling write_text, ...) - otherwise editing through
+the shell walks straight past the gate. Read-only Bash is always allowed. This is
 the mechanism SessionStart could never provide — a refused tool call, not an
 advisory note. Active only when `.intent/config.json` has gate="full".
 
@@ -39,6 +42,10 @@ def main() -> int:
         root = gate.find_repo_root(Path("."))
         if load_config(root).gate != "full":
             return 0
+        if payload.get("tool_name") == "Bash":
+            command = (payload.get("tool_input") or {}).get("command", "") or ""
+            if not gate.bash_writes_files(command):
+                return 0
         session_id = payload.get("session_id", "") or ""
         if gate.gate_is_open(root, session_id):
             return 0
